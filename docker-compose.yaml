@@ -1,0 +1,23 @@
+services:
+  mysql_db:
+    image: mysql:latest
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: mortgageautomator_db
+      MYSQL_USER: test_user
+      MYSQL_PASSWORD: test_password
+    ports:
+      - "3306:3306"
+    volumes:
+      - './docker/database:/var/lib/mysql:cached'
+
+  php:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+    tty: true
+    volumes:
+      - ./script.php:/var/www/script.php
+    depends_on:
+      - mysql_db

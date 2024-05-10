@@ -11,6 +11,9 @@ services:
       - "3306:3306"
     volumes:
       - './docker/database:/var/lib/mysql:cached'
+      -  './docker/conf/mysql.cnf:/etc/mysql/custom.cnf:ro'
+    command:
+      - '--local-infile=1'
 
   php:
     build:
@@ -19,5 +22,6 @@ services:
     tty: true
     volumes:
       - ./script.php:/var/www/script.php
+      - ./docker/conf/php.ini:/usr/local/etc/php/php.ini:ro
     depends_on:
       - mysql_db

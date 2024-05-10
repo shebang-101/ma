@@ -9,71 +9,78 @@ const DB_USER = "test_user";
 const DB_PASS = "test_password";
 
 /**
- * Generates excel style data and stores into `exceltable`.
+ * Generates excel style data and stores into CSV file.
  *
  * @param int $rowCount
  * @param int $columnCount
- * @param int $batchSize
  *
  * @return bool
  */
-function generateExcelData(int $rowCount = 1000, int $columnCount = 1000, int $batchSize = 10000): bool
+function generateExcelData(int $rowCount = 1000, int $columnCount = 1000): bool
 {
     try {
-        $pdo = getPDOConnection();
-        prepareDBTable($pdo);
+        $file = tempnam(sys_get_temp_dir(), 'excel_data');
 
+        echo "[". date("Y-m-d H:i:s") ."] Generating data and writing to CSV file...\n";
 
-        $batch = [];
+        $fp = fopen($file, 'w');
 
-        echo "[". date("Y-m-d H:i:s") ."] Generating data and inserting in batches...\n";
-        /**
-         * I tried to use generators for this data but didn't get performance improvements. But it could be efficient for memory usage:
-         *
-         * function generateData($rowCount, $columnCount)
-         * {
-         *      for ($row = 1; $row <= $rowCount; $row++) {
-         *          for ($column = 1; $column <= $columnCount; $column++) {
-         *              // Generate cell address and value
-         *              $address = getColumnLetters($column);
-         *              $value = "\$" . $address . "\$" . $row;
-         *
-         *              yield [$address, $row, $value];
-         *          }
-         *      }
-         * }
-         *
-         * Let's leave direct data generation.
-         */
+        if (!$fp) {
+            throw new Exception("Failed to open temporary file.");
+        }
+
         for ($row = 1; $row <= $rowCount; $row++) {
             for ($column = 1; $column <= $columnCount; $column++) {
                 // Generate cell address and value
                 $address = getColumnLetters($column);
                 $value = "\$" . $address . "\$" . $row;
 
-                // Add data to batch
-                $batch[] = [$address, $row, $value];
-
-                if (count($batch) >= $batchSize) {
-                    insertBatch($pdo, $batch);
-                    $batch = []; // Reset batch
-                    echo "\r[". date("Y-m-d H:i:s") ."] Inserted $batchSize records... ";
-                }
+                // Write data to CSV file
+                fputcsv($fp, [$address, $row, $value]);
             }
         }
 
-        if (!empty($batch)) {
-            insertBatch($pdo, $batch);
-            echo "\r[". date("Y-m-d H:i:s") ."] Inserted " . count($batch) . " records... ";
-        }
+        fclose($fp);
 
-        $pdo = null;
+        // Load data into the database
+        loadDataInfile($file);
+
+        // Cleanup
+        unlink($file);
 
         return true;
     } catch (PDOException $e) {
         echo "[". date("Y-m-d H:i:s") ."] Error: " . $e->getMessage();
 
         return false;
+    } catch (Exception $e) {
+        echo "[". date("Y-m-d H:i:s") ."] Error: " . $e->getMessage();
+
+        return false;
+    }
+}
+
+/**
+ * Load data from a file into the database using LOAD DATA LOCAL INFILE.
+ *
+ * @param string $file
+ *
+ * @return void
+ */
+function loadDataInfile(string $file)
+{
+    $pdo = getPDOConnection();
+
+    echo "[". date("Y-m-d H:i:s") ."] Loading data into the database...\n";
+    try {
+        // Truncate the table before loading new data
+        $pdo->exec("TRUNCATE TABLE exceltable");
+        $pdo->exec("LOAD DATA LOCAL INFILE '$file' INTO TABLE exceltable FIELDS TERMINATED BY ','");
+
+        // Close the connection
+        $pdo = null;
+    } catch (PDOException $e) {
+        echo "[". date("Y-m-d H:i:s") ."] Error: " . $e->getMessage();
     }
 }
 
@@ -85,58 +92,32 @@ function generateExcelData(int $rowCount = 1000, int $columnCount = 1000, int $b
 function getPDOConnection()
 {
     echo "[". date("Y-m-d H:i:s") ."] Connecting to the database...\n";
-    $pdo = new PDO("mysql:host=" . DB_HOST . ";dbname=" . DB_NAME, DB_USER, DB_PASS);
+    $pdo = new PDO(
+        "mysql:host=" . DB_HOST . ";dbname=" . DB_NAME,
+        DB_USER,
+        DB_PASS,
+        [
+            PDO::MYSQL_ATTR_LOCAL_INFILE => true,
+        ]
+    );
 
     // Set PDO attributes for error mode and emulated prepared statements
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     $pdo->setAttribute(PDO::ATTR_EMULATE_PREPARES, false);
 
-    return $pdo;
-}
-
-/**
- * Creates or recreates `exceltable` table.
- *
- * @param PDO $pdo
- *
- * @return void
- */
-function prepareDBTable(PDO $pdo)
-{
-    echo "[". date("Y-m-d H:i:s") ."] Dropping existing 'exceltable' table if it exists...\n";
-    $pdo->exec("DROP TABLE IF EXISTS exceltable");
-
-    echo "[". date("Y-m-d H:i:s") ."] Creating 'exceltable' table...\n";
-    $pdo->exec("CREATE TABLE exceltable (
+    try {
+        // Create the table if it doesn't exist
+        $pdo->exec("CREATE TABLE IF NOT EXISTS exceltable (
             `column` VARCHAR(5) NOT NULL,
             `row` INT UNSIGNED NOT NULL,
             `value` VARCHAR(255) DEFAULT NULL,
             PRIMARY KEY (`column`, `row`)
         ) ENGINE=InnoDB");
-}
-
-/**
- * Inserts values into DB.
- *
- * @param PDO   $pdo
- * @param array $batch
- *
- * @return void
- */
-function insertBatch(PDO $pdo,array $batch)
-{
-    // Prepare the SQL statement for batch insertion
-    $sql = "INSERT INTO exceltable (`column`, `row`, `value`) VALUES ";
-    $params = [];
-
-    foreach ($batch as $data) {
-        $sql .= "(?, ?, ?),";
-        $params = array_merge($params, $data);
+    } catch (PDOException $e) {
+        echo "[". date("Y-m-d H:i:s") ."] Error: " . $e->getMessage();
     }
 
-    $sql = rtrim($sql, ',');
-    $stmt = $pdo->prepare($sql);
-    $stmt->execute($params);
+    return $pdo;
 }
 
 /**
@@ -160,9 +141,8 @@ function getColumnLetters(int $column): string
     return $letters;
 }
 
-
 $startTime = microtime(true);
-// Call the function to generate the "Excel spreadsheet" style data with a specified batch size (e.g., 1000 inserts at once)
+// Call the function to generate the "Excel spreadsheet" style data
 generateExcelData();
 $endTime = microtime(true);
 $executionTime = $endTime - $startTime;
